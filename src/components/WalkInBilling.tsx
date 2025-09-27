@@ -18,6 +18,7 @@ interface WalkInBillingProps {
   billItems: BillItem[];
   totalAmount: number;
   onSendWhatsApp: (phone: string, billData: any) => void;
+  onWalkInCustomerCreation?: (phone: string) => Promise<boolean>;
   shopDetails?: {
     shopName: string;
     address: string;
@@ -34,6 +35,7 @@ const WalkInBilling: React.FC<WalkInBillingProps> = ({
   billItems,
   totalAmount,
   onSendWhatsApp,
+  onWalkInCustomerCreation,
   shopDetails
 }) => {
   const [phoneNumber, setPhoneNumber] = useState(selectedCustomerPhone);
@@ -50,8 +52,12 @@ const WalkInBilling: React.FC<WalkInBillingProps> = ({
     
     if (cleanPhone.length === 10) {
       onPhoneUpdate(phoneNumber);
+      // Auto-create walk-in customer when valid phone is entered
+      if (onWalkInCustomerCreation) {
+        onWalkInCustomerCreation(cleanPhone);
+      }
     }
-  }, [phoneNumber, onPhoneUpdate]);
+  }, [phoneNumber, onPhoneUpdate, onWalkInCustomerCreation]);
 
   const formatPhoneDisplay = (phone: string) => {
     const cleaned = phone.replace(/\D/g, '');
@@ -126,6 +132,43 @@ Thank you for your business! 🙏
     setShowWhatsAppPreview(false);
   };
 
+  const handlePrint = () => {
+    const billContent = generateBillContent();
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>Walk-in Bill</title>
+            <style>
+              body { font-family: 'Courier New', monospace; padding: 20px; line-height: 1.4; }
+              pre { white-space: pre-wrap; font-size: 12px; margin: 0; }
+              @media print { body { margin: 0; padding: 10px; } pre { font-size: 11px; } }
+            </style>
+          </head>
+          <body>
+            <pre>${billContent}</pre>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      printWindow.print();
+    }
+  };
+
+  const handleDownload = () => {
+    const billContent = generateBillContent();
+    const blob = new Blob([billContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `WalkIn_Bill_${new Date().toISOString().slice(0,10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-lg p-4 mb-4">
       <div className="flex items-center mb-3">
@@ -196,6 +239,18 @@ Thank you for your business! 🙏
           >
             <MessageCircle className="mr-2 h-4 w-4" />
             Share Bill
+          </button>
+          <button
+            onClick={handlePrint}
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm"
+          >
+            Print
+          </button>
+          <button
+            onClick={handleDownload}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+          >
+            Download
           </button>
         </div>
       )}

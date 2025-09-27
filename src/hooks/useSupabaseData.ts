@@ -27,6 +27,9 @@ interface Bill {
   totalAmount: number;
   paidAmount: number;
   balanceAmount: number;
+  cleaningCharge?: number;
+  deliveryCharge?: number;
+  advanceAmount?: number;
   paymentMethod: 'cash' | 'upi' | 'check' | 'cash_gpay';
   upiType?: string;
   bankName?: string;
@@ -69,7 +72,6 @@ export const useSupabaseData = (businessId: string) => {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [salaries, setSalaries] = useState<SalaryRow[]>([]);
 
-  // Refresh customers data function - BULLETPROOF BALANCE SYNC
   const refreshCustomersData = async () => {
     try {
       console.log('[BALANCE SYNC] Fetching latest customer data from database...');
@@ -259,6 +261,9 @@ export const useSupabaseData = (businessId: string) => {
           totalAmount: parseFloat(b.total_amount.toString()),
           paidAmount: parseFloat((b as any).paid_amount?.toString() || '0'),
           balanceAmount: parseFloat((b as any).balance_amount?.toString() || '0'),
+          cleaningCharge: (b as any).cleaning_charge != null ? parseFloat((b as any).cleaning_charge) : 0,
+          deliveryCharge: (b as any).delivery_charge != null ? parseFloat((b as any).delivery_charge) : 0,
+          advanceAmount: (b as any).advance_amount != null ? parseFloat((b as any).advance_amount) : 0,
           paymentMethod: b.payment_method as 'cash' | 'upi' | 'check' | 'cash_gpay',
           upiType: (b as any).upi_type || undefined,
           bankName: (b as any).bank_name || undefined,
@@ -354,17 +359,133 @@ export const useSupabaseData = (businessId: string) => {
   // Add supplier
   const addSupplier = async (name: string) => {
     try {
-      if (!name.trim()) return;
-      const { data, error } = await (supabase as any)
-        .from('suppliers')
-        .insert([{ name: name.trim(), business_id: businessId }])
-        .select('id, name')
-        .single();
-      if (error) throw error;
-      setSuppliers(prev => [...prev, data.name]);
-      setSuppliersFull(prev => [...prev, { id: (data as any).id, name: data.name }]);
+      console.log(`[ADD SUPPLIER] Adding supplier: ${name} for business: ${businessId}`);
+      
+      if (!name.trim()) {
+        throw new Error('Supplier name is required');
+      }
+      
+      const cleanName = name.trim();
+      
+      // Try using the safe database function first
+      try {
+        const { data: supplierData, error: rpcError } = await (supabase as any).rpc('get_or_create_supplier', {
+          p_business_id: businessId,
+          p_supplier_name: cleanName
+        });
+        
+        if (rpcError) {
+          console.warn('[ADD SUPPLIER] RPC function failed, trying direct insert:', rpcError);
+          throw new Error(`RPC failed: ${rpcError.message}`);
+        }
+        
+        if (supplierData && supplierData.length > 0) {
+          const supplier = supplierData[0];
+          console.log(`[ADD SUPPLIER] Supplier ${supplier.is_new ? 'created' : 'found'}:`, supplier);
+          
+          // Update local state
+          setSuppliers(prev => [...prev, supplier.supplier_name]);
+          setSuppliersFull(prev => {
+            const exists = prev.find(s => s.id === supplier.supplier_id);
+            if (!exists) {
+              return [...prev, { id: supplier.supplier_id, name: supplier.supplier_name }];
+            }
+            return prev;
+          });
+          
+          return supplier;
+        } else {
+          throw new Error('No supplier data returned from RPC');
+        }
+      } catch (rpcError) {
+        console.warn('[ADD SUPPLIER] RPC failed, trying direct insert:', rpcError);
+        
+        // Fallback to direct insertion
+        const { data, error } = await (supabase as any)
+          .from('suppliers')
+          .insert([{ name: cleanName, business_id: businessId }])
+          .select('id, name')
+          .single();
+        
+        if (error) {
+          console.error('[ADD SUPPLIER] Direct insert error:', error);
+          if (error.code === '23505') {
+            throw new Error('Supplier with this name already exists');
+          }
+          throw error;
+        }
+        
+        console.log('[ADD SUPPLIER] Supplier added successfully via direct insert:', data);
+        setSuppliers(prev => [...prev, data.name]);
+        setSuppliersFull(prev => [...prev, { id: (data as any).id, name: data.name }]);
+        return data;
+      }
     } catch (error) {
-      console.error('Error adding supplier:', error);
+      console.error('[ADD SUPPLIER] Error adding supplier:', error);
+      throw error;
+    }
+  };
+
+  // Get supplier suggestions for autocomplete
+  const getSupplierSuggestions = async (searchTerm: string = '') => {
+    try {
+      const { data, error } = await (supabase as any).rpc('get_supplier_suggestions', {
+        p_business_id: businessId,
+        p_search_term: searchTerm
+      });
+      
+      if (error) {
+        console.error('Error fetching supplier suggestions:', error);
+        return [];
+      }
+      
+      return data || [];
+    } catch (error) {
+      console.error('Error in getSupplierSuggestions:', error);
+      return [];
+    }
+  };
+
+  // Enhanced customer creation with comprehensive error handling
+  const safeCreateCustomer = async (name: string, phone: string, balance: number = 0) => {
+    try {
+      console.log(`[SAFE CREATE] Creating customer: ${name}, phone: ${phone}`);
+      
+      const { data, error } = await (supabase as any).rpc('safe_get_or_create_customer', {
+        p_name: name,
+        p_phone: phone,
+        p_business_id: businessId,
+        p_balance: balance
+      });
+      
+      if (error) {
+        console.error('[SAFE CREATE] RPC error:', error);
+        throw new Error(`Customer creation failed: ${error.message}`);
+      }
+      
+      if (!data || data.length === 0) {
+        throw new Error('No customer data returned');
+      }
+      
+      const customerData = data[0];
+      console.log(`[SAFE CREATE] Customer ${customerData.is_new ? 'created' : 'found'}:`, customerData);
+      
+      // Update local state
+      setCustomers(prev => {
+        const exists = prev.find(c => c.phone === phone);
+        if (!exists) {
+          return [...prev, {
+            name: customerData.customer_name,
+            phone: phone,
+            balance: balance
+          }];
+        }
+        return prev;
+      });
+      
+      return customerData;
+    } catch (error) {
+      console.error('[SAFE CREATE] Error:', error);
       throw error;
     }
   };
@@ -372,14 +493,59 @@ export const useSupabaseData = (businessId: string) => {
     try {
       console.log(`[ADD CUSTOMER] Adding customer: ${customer.name} for business: ${businessId}`);
       
+      // Validate required fields
+      if (!customer.name || customer.name.trim() === '') {
+        throw new Error('Customer name is required');
+      }
+      
+      if (!customer.phone || customer.phone.trim() === '') {
+        throw new Error('Customer phone is required');
+      }
+
+      // Check for existing customer with same phone
+      const { data: existingCustomer, error: checkError } = await supabase
+        .from('customers')
+        .select('id, name, phone')
+        .eq('phone', customer.phone)
+        .eq('business_id', businessId)
+        .single();
+
+      if (checkError && checkError.code !== 'PGRST116') {
+        console.error('[ADD CUSTOMER] Error checking existing customer:', checkError);
+        throw new Error(`Database check failed: ${checkError.message}`);
+      }
+
+      if (existingCustomer) {
+        console.log(`[ADD CUSTOMER] Customer with phone ${customer.phone} already exists:`, existingCustomer);
+        // Update local state with existing customer
+        setCustomers(prev => {
+          const exists = prev.find(c => c.phone === customer.phone);
+          if (!exists) {
+            return [...prev, {
+              name: existingCustomer.name,
+              phone: existingCustomer.phone,
+              balance: 0 // Will be updated by refresh
+            }];
+          }
+          return prev;
+        });
+        return existingCustomer;
+      }
+      
+      // Insert new customer
+      const insertData = {
+        name: customer.name.trim(),
+        phone: customer.phone.trim(),
+        balance: customer.balance || 0,
+        business_id: businessId,
+        is_walkin: customer.name.includes('Walk-in Customer') || false
+      };
+
+      console.log('[ADD CUSTOMER] Inserting customer data:', insertData);
+
       const { data, error } = await supabase
         .from('customers')
-        .insert([{
-          name: customer.name,
-          phone: customer.phone,
-          balance: customer.balance,
-          business_id: businessId
-        }])
+        .insert([insertData])
         .select()
         .single();
 
@@ -387,18 +553,26 @@ export const useSupabaseData = (businessId: string) => {
         console.error('[ADD CUSTOMER] Database error:', error);
         if (error.code === '42501') {
           throw new Error('Cannot add customer: Database security policies are blocking this operation. Please follow the setup instructions in EMERGENCY_FIX.md');
+        } else if (error.code === '23505') {
+          throw new Error('Customer with this phone number already exists');
+        } else if (error.code === '23502') {
+          throw new Error('Required field is missing');
         }
-        throw error;
+        throw new Error(`Database error: ${error.message}`);
       }
       
       console.log('[ADD CUSTOMER] Customer added successfully:', data);
+      
+      // Update local state
       setCustomers(prev => [...prev, {
         name: data.name,
         phone: data.phone,
         balance: parseFloat(data.balance?.toString() || '0')
       }]);
+      
+      return data;
     } catch (error) {
-      console.error('Error adding customer:', error);
+      console.error('[ADD CUSTOMER] Error adding customer:', error);
       throw error;
     }
   };
@@ -558,15 +732,37 @@ export const useSupabaseData = (businessId: string) => {
         console.warn('Creating bill with no items - this is a balance-only transaction');
       }
 
+      // Server-side safety: recompute key monetary fields using cents
+      const { toCents, computeTotals } = await import('../lib/utils');
+      const prevC = toCents((await getRealTimeBalance(bill.customer)) || 0);
+      const itemsTotalC = toCents(bill.items.reduce((s, it) => s + (it.amount || 0), 0));
+      const cleaningC = toCents((bill as any).cleaningCharge || 0);
+      const deliveryC = toCents((bill as any).deliveryCharge || 0);
+      const paidC = toCents(bill.paidAmount || 0);
+      const totals = computeTotals({
+        previousBalance: prevC,
+        itemsTotal: itemsTotalC,
+        deliveryCharge: deliveryC,
+        cleaningCharge: cleaningC,
+        paidAmount: paidC,
+      });
+
+      const computedTotal = totals.transactionAmount / 100;
+      const computedBalance = totals.newBalance / 100;
+      const computedAdvance = 0; // per latest requirement: no advance tracking
+
       // Create the insert object with comprehensive field mapping
       const insertData = {
         customer_name: bill.customer,
         customer_phone: bill.customerPhone,
         bill_date: bill.date,
         items: bill.items as any,
-        total_amount: bill.totalAmount || 0,
+        total_amount: computedTotal,
         paid_amount: bill.paidAmount || 0,
-        balance_amount: bill.balanceAmount || 0,
+        balance_amount: computedBalance,
+        cleaning_charge: (bill as any).cleaningCharge ?? 0,
+        delivery_charge: (bill as any).deliveryCharge ?? 0,
+        advance_amount: computedAdvance,
         payment_method: bill.paymentMethod,
         upi_type: bill.upiType || null,
         bank_name: bill.bankName || null,
@@ -605,6 +801,9 @@ export const useSupabaseData = (businessId: string) => {
         totalAmount: parseFloat(data.total_amount?.toString() || '0'),
         paidAmount: parseFloat((data as any).paid_amount?.toString() || '0'),
         balanceAmount: parseFloat((data as any).balance_amount?.toString() || '0'),
+        cleaningCharge: (data as any).cleaning_charge ? parseFloat((data as any).cleaning_charge) : 0,
+        deliveryCharge: (data as any).delivery_charge ? parseFloat((data as any).delivery_charge) : 0,
+        advanceAmount: (data as any).advance_amount ? parseFloat((data as any).advance_amount) : 0,
         paymentMethod: data.payment_method as 'cash' | 'upi' | 'check' | 'cash_gpay',
         upiType: (data as any).upi_type || undefined,
         bankName: (data as any).bank_name || undefined,
@@ -614,8 +813,19 @@ export const useSupabaseData = (businessId: string) => {
         timestamp: new Date(data.created_at || data.timestamp || new Date())
       };
       
-      // Automatically update customer balance in database
-      await updateCustomerBalance(bill.customer, bill.balanceAmount);
+      // Automatically update customer balance in database (no advance)
+      try {
+        const { error: custErr } = await supabase
+          .from('customers')
+          .update({
+            balance: computedBalance
+          })
+          .eq('name', bill.customer)
+          .eq('business_id', businessId);
+        if (custErr) throw custErr;
+      } catch (e) {
+        console.error('[ADD BILL] Failed updating customer advance/balance:', e);
+      }
       
       setBills(prev => [newBill, ...prev]);
       console.log('Bill successfully added:', newBill);
@@ -642,6 +852,25 @@ export const useSupabaseData = (businessId: string) => {
       const originalBill = bills.find(b => b.id === bill.id);
       if (!originalBill) throw new Error('Original bill not found');
 
+      // Recompute monetary fields server-side for integrity
+      const { toCents, computeTotals } = await import('../lib/utils');
+      const prevC = toCents((await getRealTimeBalance(bill.customer)) || 0);
+      const itemsTotalC = toCents(bill.items.reduce((s, it) => s + (it.amount || 0), 0));
+      const cleaningC = toCents((bill as any).cleaningCharge || 0);
+      const deliveryC = toCents((bill as any).deliveryCharge || 0);
+      const paidC = toCents(bill.paidAmount || 0);
+      const totals = computeTotals({
+        previousBalance: prevC,
+        itemsTotal: itemsTotalC,
+        deliveryCharge: deliveryC,
+        cleaningCharge: cleaningC,
+        paidAmount: paidC,
+      });
+
+      const computedTotal = totals.transactionAmount / 100;
+      const computedBalance = totals.newBalance / 100;
+      const computedAdvance = 0; // per latest requirement: no advance tracking
+
       // Update the bill in database
       const { error } = await supabase
         .from('bills')
@@ -651,9 +880,12 @@ export const useSupabaseData = (businessId: string) => {
           customer_phone: bill.customerPhone,
           bill_date: bill.date,
           items: bill.items as any,
-          total_amount: bill.totalAmount,
+          total_amount: computedTotal,
           paid_amount: bill.paidAmount,
-          balance_amount: bill.balanceAmount,
+          balance_amount: computedBalance,
+          cleaning_charge: (bill as any).cleaningCharge ?? 0,
+          delivery_charge: (bill as any).deliveryCharge ?? 0,
+          advance_amount: computedAdvance,
           payment_method: bill.paymentMethod,
           upi_type: bill.upiType,
           bank_name: bill.bankName,
@@ -667,7 +899,7 @@ export const useSupabaseData = (businessId: string) => {
       if (error) throw error;
 
       // Calculate the difference in balance and update customer balance
-      const balanceDifference = bill.balanceAmount - originalBill.balanceAmount;
+      const balanceDifference = computedBalance - originalBill.balanceAmount;
       if (balanceDifference !== 0) {
         const customer = customers.find(c => c.name === bill.customer);
         if (customer) {
@@ -676,7 +908,21 @@ export const useSupabaseData = (businessId: string) => {
         }
       }
       
-      setBills(prev => prev.map(b => b.id === bill.id ? bill : b));
+      // Update customer balance as well (no advance)
+      try {
+        const { error: custErr } = await supabase
+          .from('customers')
+          .update({
+            balance: computedBalance
+          })
+          .eq('name', bill.customer)
+          .eq('business_id', businessId);
+        if (custErr) throw custErr;
+      } catch (e) {
+        console.error('[UPDATE BILL] Failed updating customer advance/balance:', e);
+      }
+
+      setBills(prev => prev.map(b => b.id === bill.id ? { ...bill, totalAmount: computedTotal, balanceAmount: computedBalance, advanceAmount: computedAdvance } : b));
     } catch (error) {
       console.error('Error updating bill:', error);
       throw error;
@@ -737,10 +983,12 @@ export const useSupabaseData = (businessId: string) => {
     updateProduct,
     deleteProduct,
     addCustomer,
+    safeCreateCustomer,
     updateCustomer,
     updateCustomerBalance,
     deleteCustomer,
     addSupplier,
+    getSupplierSuggestions,
     addPurchase,
     addSalary,
     addBill,

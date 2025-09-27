@@ -12,8 +12,9 @@ interface ProductsProps {
   onAddProduct: (product: Product) => void;
   onUpdateProduct: (id: number, name: string) => void;
   onDeleteProduct: (id: number) => void;
-  suppliers?: string[];
+  suppliers?: { id: number; name: string }[];
   onAddSupplier?: (name: string) => Promise<void> | void;
+  getSupplierSuggestions?: (searchTerm: string) => Promise<{ id: number; name: string }[]>;
 }
 
 const Products: React.FC<ProductsProps> = ({ 
@@ -22,7 +23,8 @@ const Products: React.FC<ProductsProps> = ({
   onUpdateProduct, 
   onDeleteProduct,
   suppliers = [],
-  onAddSupplier
+  onAddSupplier,
+  getSupplierSuggestions
 }) => {
   const [newProductName, setNewProductName] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -64,8 +66,9 @@ const Products: React.FC<ProductsProps> = ({
       await onAddSupplier(name);
       setNewSupplierName('');
     } catch (e) {
-      alert('Failed to add supplier');
-      console.error(e);
+      const msg = (e as any)?.message || 'Unknown error';
+      alert('Failed to add supplier: ' + msg);
+      console.error('Failed to add supplier:', e);
     }
   };
 
@@ -96,24 +99,26 @@ const Products: React.FC<ProductsProps> = ({
       {/* Suppliers Section */}
       <div className="bg-green-50 border border-green-200 rounded-lg p-4">
         <h3 className="text-lg font-semibold mb-4">Suppliers</h3>
-        <div className="flex gap-4 mb-4">
+        <form
+          className="flex gap-4 mb-4"
+          onSubmit={(e) => { e.preventDefault(); handleAddSupplier(); }}
+        >
           <input
             type="text"
             value={newSupplierName}
             onChange={(e) => setNewSupplierName(e.target.value)}
             className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
             placeholder="Supplier Name"
-            onKeyDown={(e) => e.key === 'Enter' && handleAddSupplier()}
           />
           <button
-            onClick={handleAddSupplier}
+            type="submit"
             className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
             disabled={!onAddSupplier}
           >
             <Plus className="inline mr-2 h-4 w-4" />
             Add Supplier
           </button>
-        </div>
+        </form>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
           {suppliers.map((s, idx) => (
             <div key={`${s}-${idx}`} className="bg-white border border-gray-200 rounded-lg p-3">
@@ -129,8 +134,17 @@ const Products: React.FC<ProductsProps> = ({
       {/* Products List */}
       <div>
         <h3 className="text-lg font-semibold mb-4">Products List ({products.length})</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {products.map((product) => (
+        
+        {products.length === 0 ? (
+          <div className="text-center py-8">
+            <div className="bg-gray-50 border border-gray-200 text-gray-600 px-4 py-3 rounded">
+              <h4 className="font-semibold">No Products Available</h4>
+              <p>Add your first product using the form above.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {products.map((product) => (
             <div key={product.id} className="bg-white border border-gray-200 rounded-lg p-4">
               {editingId === product.id ? (
                 <div className="space-y-3">
@@ -176,8 +190,9 @@ const Products: React.FC<ProductsProps> = ({
                 </div>
               )}
             </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

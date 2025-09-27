@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { User, Lock, Eye, EyeOff, Key, ArrowLeft } from 'lucide-react';
+import AdminPanel from './AdminPanel';
+import { supabase } from '@/integrations/supabase/client';
 
 interface LoginProps {
   onLogin: (userType: 'owner' | 'staff', businessId: 'santhosh1' | 'santhosh2' | 'vasan' | 'demo1_business' | 'demo2_business' | 'demo3_business' | 'demo4_business' | 'demo5_business' | 'demo6_business' | 'demo7_business' | 'demo8_business' | 'demo9_business' | 'demo10_business') => void;
@@ -21,6 +23,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
   const [verificationStep, setVerificationStep] = useState<'verify' | 'change'>('verify');
   const [successMessage, setSuccessMessage] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showAdminPrompt, setShowAdminPrompt] = useState(false);
 
   // User credentials storage (in real app, this would be in a secure database)
   const [userCredentials, setUserCredentials] = useState({
@@ -47,16 +53,31 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     'demo10': { password: '1234@', userType: 'owner' as const, businessId: 'demo10_business' as const }
   });
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setError('');
-    
+    // Admin credentials
+    if (username === 'billmychciken@gmail.com' && password === 'dvdpaiya10') {
+      setIsAdmin(true);
+      setShowAdminPanel(true);
+      return;
+    }
+    // Supabase shops_logins
+    const { data: shop, error: shopErr } = await (supabase as any)
+      .from('shops_logins')
+      .select('username, password, business_id')
+      .eq('username', username)
+      .single();
+    if (!shopErr && shop && shop.password === password) {
+      onLogin('owner', shop.business_id as any);
+      return;
+    }
+    // Legacy demo fallback
     const user = userCredentials[username as keyof typeof userCredentials];
     if (user && user.password === password) {
       onLogin(user.userType, user.businessId);
       return;
     }
-    
-    setError('Invalid username or password');
+    setError('Invalid credentials, try again.');
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -314,9 +335,42 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     );
   }
 
+  if (showAdminPanel && isAdmin) {
+    const createShop = async (newUsername: string, newPassword: string, logoUrl?: string) => {
+      const businessId = `${newUsername.replace(/[^a-zA-Z0-9]/g, '_')}` as any;
+      const { error: insertErr } = await (supabase as any)
+        .from('shops_logins')
+        .insert({ username: newUsername, password: newPassword, business_id: businessId, logo_url: logoUrl || null });
+      if (insertErr) throw new Error(insertErr.message);
+      setUsername(newUsername);
+      setPassword('');
+      setShowAdminPanel(false);
+      setShowForm(true);
+    };
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-lg p-6 sm:p-8 w-full max-w-lg">
+          <div className="text-center mb-6 sm:mb-8">
+            <div className="mx-auto w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center mb-4">
+              <User className="h-8 w-8 text-white" />
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-blue-600 mb-2">Admin Panel</h1>
+          </div>
+          <AdminPanel onCreateShopLogin={createShop} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-lg p-6 sm:p-8 w-full max-w-md">
+      <div className="bg-white rounded-xl shadow-lg p-6 sm:p-8 w-full max-w-md relative">
+        <button
+          onClick={() => setShowAdminPrompt(true)}
+          className="absolute right-4 top-4 text-xs px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700"
+        >
+          Admin Access
+        </button>
         <div className="text-center mb-6 sm:mb-8">
           <div className="mx-auto w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center mb-4">
             <User className="h-8 w-8 text-white" />
@@ -326,8 +380,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </h1>
           <p className="text-gray-600 text-sm sm:text-base">System Login</p>
         </div>
-        
         <div className="space-y-4 sm:space-y-6">
+          {showAdminPrompt && (
+            <div className="p-2 bg-purple-50 text-purple-800 text-xs rounded border border-purple-200">
+              Enter admin username and password to access the Admin Panel
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Username

@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Save, Trash2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import SupplierAutocomplete from './SupplierAutocomplete';
 
 interface LoadEntry {
   id?: number;
@@ -14,9 +15,17 @@ interface LoadEntry {
 
 interface LoadManagerProps {
   businessId: string;
+  suppliersExternal?: { id: number; name: string }[];
+  getSupplierSuggestions?: (searchTerm: string) => Promise<{ id: number; name: string }[]>;
+  addSupplier?: (name: string) => Promise<void>;
 }
 
-const LoadManager: React.FC<LoadManagerProps> = ({ businessId }) => {
+const LoadManager: React.FC<LoadManagerProps> = ({ 
+  businessId, 
+  suppliersExternal, 
+  getSupplierSuggestions, 
+  addSupplier 
+}) => {
   const [entries, setEntries] = useState<LoadEntry[]>([]);
   const [newEntry, setNewEntry] = useState<LoadEntry>({
     entry_date: new Date().toISOString().split('T')[0],
@@ -34,57 +43,108 @@ const LoadManager: React.FC<LoadManagerProps> = ({ businessId }) => {
   const [suppliers, setSuppliers] = useState<{id:number,name:string}[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<number | ''>('');
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | ''>('');
+  const [selectedSupplierName, setSelectedSupplierName] = useState('');
 
   // Load existing entries and inventory
   useEffect(() => {
     loadData();
   }, [businessId]);
 
+  // Keep suppliers in sync with external state if provided
+  useEffect(() => {
+    if (suppliersExternal && suppliersExternal.length >= 0) {
+      setSuppliers(suppliersExternal);
+    }
+  }, [suppliersExternal]);
+
   const loadData = async () => {
     try {
       setLoading(true);
+      console.log('[LOAD MANAGER] Loading data for business:', businessId);
       
-      // Load load entries
-      const { data: entriesData, error: entriesError } = await supabase
-        .from('load_entries')
-        .select('*')
-        .eq('business_id', businessId)
-        .order('entry_date', { ascending: false });
+      // Load load entries with error handling
+      try {
+        const { data: entriesData, error: entriesError } = await supabase
+          .from('load_entries')
+          .select('*')
+          .eq('business_id', businessId)
+          .order('entry_date', { ascending: false });
 
-      if (entriesError) {
-        console.error('Error loading entries:', entriesError);
-      } else {
-        console.log('Loaded entries:', entriesData);
-        setEntries(entriesData || []);
+        if (entriesError) {
+          console.error('[LOAD MANAGER] Error loading entries:', entriesError);
+          // Don't fail completely, just show empty entries
+          setEntries([]);
+        } else {
+          console.log('[LOAD MANAGER] Loaded entries:', entriesData);
+          setEntries(entriesData || []);
+        }
+      } catch (entriesErr) {
+        console.error('[LOAD MANAGER] Exception loading entries:', entriesErr);
+        setEntries([]);
       }
 
-      // Load current inventory
-      const { data: inventoryData, error: inventoryError } = await supabase
-        .from('inventory')
-        .select('*')
-        .eq('business_id', businessId)
-        .single();
+      // Load current inventory with error handling
+      try {
+        const { data: inventoryData, error: inventoryError } = await supabase
+          .from('inventory')
+          .select('*')
+          .eq('business_id', businessId)
+          .single();
 
-      if (inventoryError && inventoryError.code !== 'PGRST116') {
-        console.error('Error loading inventory:', inventoryError);
-      } else {
-        const stock = (inventoryData as any)?.chicken_stock_kg || 0;
-        setCurrentStock(stock);
+        if (inventoryError && inventoryError.code !== 'PGRST116') {
+          console.error('[LOAD MANAGER] Error loading inventory:', inventoryError);
+          setCurrentStock(0);
+        } else {
+          const stock = (inventoryData as any)?.chicken_stock_kg || 0;
+          setCurrentStock(stock);
+          console.log('[LOAD MANAGER] Current stock:', stock);
+        }
         
         // Calculate weekly consumption (simple average of last 4 weeks)
-        calculateWeeklyConsumption();
+        await calculateWeeklyConsumption();
+      } catch (inventoryErr) {
+        console.error('[LOAD MANAGER] Exception loading inventory:', inventoryErr);
+        setCurrentStock(0);
       }
 
-      // Load products and suppliers for dropdowns
-      const [{ data: p }, { data: s }] = await Promise.all([
-        supabase.from('products').select('id,name').eq('business_id', businessId).order('name'),
-        supabase.from('suppliers').select('id,name').eq('business_id', businessId).order('name')
-      ]);
-      setProducts(p || []);
-      setSuppliers(s || []);
+      // Load products and suppliers for dropdowns with error handling
+      try {
+        const [productsResult, suppliersResult] = await Promise.allSettled([
+          supabase.from('products').select('id,name').eq('business_id', businessId).order('name'),
+          suppliersExternal ? Promise.resolve({ data: suppliersExternal }) : supabase.from('suppliers').select('id,name').eq('business_id', businessId).order('name')
+        ]);
+        
+        // Handle products result
+        if (productsResult.status === 'fulfilled' && productsResult.value.data) {
+          setProducts(productsResult.value.data);
+          console.log('[LOAD MANAGER] Loaded products:', productsResult.value.data.length);
+        } else {
+          console.error('[LOAD MANAGER] Error loading products:', productsResult.status === 'rejected' ? productsResult.reason : 'No data');
+          setProducts([]);
+        }
+        
+        // Handle suppliers result
+        if (suppliersResult.status === 'fulfilled') {
+          const suppliersData = (suppliersResult.value as any)?.data || [];
+          setSuppliers(suppliersData);
+          console.log('[LOAD MANAGER] Loaded suppliers:', suppliersData.length);
+        } else {
+          console.error('[LOAD MANAGER] Error loading suppliers:', suppliersResult.status === 'rejected' ? suppliersResult.reason : 'No data');
+          setSuppliers([]);
+        }
+      } catch (dropdownErr) {
+        console.error('[LOAD MANAGER] Exception loading dropdowns:', dropdownErr);
+        setProducts([]);
+        setSuppliers([]);
+      }
       
     } catch (error) {
-      console.error('Error loading data:', error);
+      console.error('[LOAD MANAGER] Critical error loading data:', error);
+      // Set safe defaults
+      setEntries([]);
+      setCurrentStock(0);
+      setProducts([]);
+      setSuppliers([]);
     } finally {
       setLoading(false);
     }
@@ -144,35 +204,58 @@ const LoadManager: React.FC<LoadManagerProps> = ({ businessId }) => {
       }
 
       setSaving(true);
-      console.log('Saving entry:', newEntry);
+      console.log('[LOAD MANAGER] Saving entry:', newEntry);
 
-      // Create the entry object for insertion
-      const entryToInsert = {
-        business_id: businessId,
-        entry_date: newEntry.entry_date,
-        no_of_boxes: Number(newEntry.no_of_boxes),
-        quantity_with_box: Number(newEntry.quantity_with_box),
-        no_of_boxes_after: Number(newEntry.no_of_boxes_after),
-        quantity_after_box: Number(newEntry.quantity_after_box),
-        product_id: Number(selectedProductId),
-        supplier_id: Number(selectedSupplierId)
-      };
+      // Try using the safe database function first
+      try {
+        const { data: entryId, error: rpcError } = await supabase.rpc('safe_add_load_entry', {
+          p_business_id: businessId,
+          p_entry_date: newEntry.entry_date,
+          p_no_of_boxes: Number(newEntry.no_of_boxes),
+          p_quantity_with_box: Number(newEntry.quantity_with_box),
+          p_no_of_boxes_after: Number(newEntry.no_of_boxes_after),
+          p_quantity_after_box: Number(newEntry.quantity_after_box),
+          p_product_id: Number(selectedProductId),
+          p_supplier_id: Number(selectedSupplierId)
+        });
 
-      console.log('Entry to insert:', entryToInsert);
+        if (rpcError) {
+          console.warn('[LOAD MANAGER] RPC function failed, trying direct insert:', rpcError);
+          throw new Error(`RPC failed: ${rpcError.message}`);
+        }
 
-      const { data, error } = await supabase
-        .from('load_entries')
-        .insert([entryToInsert])
-        .select()
-        .single();
+        console.log('[LOAD MANAGER] Entry saved successfully via RPC, ID:', entryId);
+      } catch (rpcError) {
+        console.warn('[LOAD MANAGER] RPC failed, trying direct insert:', rpcError);
+        
+        // Fallback to direct insertion
+        const entryToInsert = {
+          business_id: businessId,
+          entry_date: newEntry.entry_date,
+          no_of_boxes: Number(newEntry.no_of_boxes),
+          quantity_with_box: Number(newEntry.quantity_with_box),
+          no_of_boxes_after: Number(newEntry.no_of_boxes_after),
+          quantity_after_box: Number(newEntry.quantity_after_box),
+          product_id: Number(selectedProductId),
+          supplier_id: Number(selectedSupplierId)
+        };
 
-      if (error) {
-        console.error('Supabase error details:', error);
-        alert('Error saving entry: ' + error.message);
-        return;
+        console.log('[LOAD MANAGER] Entry to insert:', entryToInsert);
+
+        const { data, error } = await supabase
+          .from('load_entries')
+          .insert([entryToInsert])
+          .select()
+          .single();
+
+        if (error) {
+          console.error('[LOAD MANAGER] Supabase error details:', error);
+          alert('Error saving entry: ' + error.message);
+          return;
+        }
+
+        console.log('[LOAD MANAGER] Entry saved successfully via direct insert:', data);
       }
-
-      console.log('Entry saved successfully:', data);
       
       // Reset form
       setNewEntry({
@@ -184,13 +267,14 @@ const LoadManager: React.FC<LoadManagerProps> = ({ businessId }) => {
       });
       setSelectedProductId('');
       setSelectedSupplierId('');
+      setSelectedSupplierName('');
 
       // Reload data to get updated inventory and entries
       await loadData();
       alert('Entry saved successfully!');
       
     } catch (error) {
-      console.error('Unexpected error saving entry:', error);
+      console.error('[LOAD MANAGER] Unexpected error saving entry:', error);
       alert('Unexpected error saving entry. Please try again.');
     } finally {
       setSaving(false);
@@ -225,7 +309,43 @@ const LoadManager: React.FC<LoadManagerProps> = ({ businessId }) => {
   };
 
   if (loading) {
-    return <div className="text-center py-8">Loading...</div>;
+    return (
+      <div className="text-center py-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-gray-600">Loading load management data...</p>
+        <p className="text-sm text-gray-500 mt-2">Please wait while we fetch your data...</p>
+      </div>
+    );
+  }
+
+  // Show error state if no data could be loaded
+  if (products.length === 0 && suppliers.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded mb-4">
+          <h3 className="font-semibold">No Data Available</h3>
+          <p>Please add products and suppliers first to use load management.</p>
+          <p className="text-sm mt-2">You can add products and suppliers from the Products page.</p>
+        </div>
+        <div className="space-x-4">
+          <button
+            onClick={loadData}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          >
+            Retry Loading
+          </button>
+          <button
+            onClick={() => {
+              // This would need to be passed as a prop to navigate to products page
+              console.log('Navigate to products page to add data');
+            }}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+          >
+            Go to Products Page
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -281,16 +401,45 @@ const LoadManager: React.FC<LoadManagerProps> = ({ businessId }) => {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">Supplier</label>
-            <select
-              value={selectedSupplierId}
-              onChange={(e) => setSelectedSupplierId(e.target.value ? Number(e.target.value) : '')}
-              className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">Select supplier</option>
-              {suppliers.map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
+            {getSupplierSuggestions && addSupplier ? (
+              <SupplierAutocomplete
+                value={selectedSupplierName}
+                onChange={(name) => {
+                  setSelectedSupplierName(name);
+                  const supplier = suppliers.find(s => s.name === name);
+                  setSelectedSupplierId(supplier ? supplier.id : '');
+                }}
+                onAddSupplier={async (name) => {
+                  await addSupplier(name);
+                  // Refresh suppliers list
+                  const { data: suppliersData } = await supabase
+                    .from('suppliers')
+                    .select('id, name')
+                    .eq('business_id', businessId)
+                    .order('name');
+                  setSuppliers(suppliersData || []);
+                  setSelectedSupplierName(name);
+                  const newSupplier = suppliersData?.find(s => s.name === name);
+                  if (newSupplier) {
+                    setSelectedSupplierId(newSupplier.id);
+                  }
+                }}
+                getSupplierSuggestions={getSupplierSuggestions}
+                placeholder="Search or add supplier..."
+                className="w-full"
+              />
+            ) : (
+              <select
+                value={selectedSupplierId}
+                onChange={(e) => setSelectedSupplierId(e.target.value ? Number(e.target.value) : '')}
+                className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select supplier</option>
+                {suppliers.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">No of Boxes</label>

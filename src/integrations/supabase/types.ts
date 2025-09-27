@@ -21,9 +21,12 @@ export type Database = {
           bill_date: string | null
           bill_number: string | null
           business_id: string
+          cleaning_charge: number | null
           cash_amount: number | null
+          delivery_charge: number | null
           check_number: string | null
           created_at: string | null
+          advance_amount: number | null
           customer_name: string
           customer_phone: string | null
           gpay_amount: number | null
@@ -41,9 +44,12 @@ export type Database = {
           bill_date?: string | null
           bill_number?: string | null
           business_id: string
+          cleaning_charge?: number | null
           cash_amount?: number | null
+          delivery_charge?: number | null
           check_number?: string | null
           created_at?: string | null
+          advance_amount?: number | null
           customer_name: string
           customer_phone?: string | null
           gpay_amount?: number | null
@@ -61,9 +67,12 @@ export type Database = {
           bill_date?: string | null
           bill_number?: string | null
           business_id?: string
+          cleaning_charge?: number | null
           cash_amount?: number | null
+          delivery_charge?: number | null
           check_number?: string | null
           created_at?: string | null
+          advance_amount?: number | null
           customer_name?: string
           customer_phone?: string | null
           gpay_amount?: number | null
@@ -104,6 +113,33 @@ export type Database = {
           id?: number
           name?: string
           phone?: string
+        }
+        Relationships: []
+      }
+      shops_logins: {
+        Row: {
+          id: number
+          username: string
+          password: string
+          business_id: string
+          logo_url: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: number
+          username: string
+          password: string
+          business_id: string
+          logo_url?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: number
+          username?: string
+          password?: string
+          business_id?: string
+          logo_url?: string | null
+          created_at?: string | null
         }
         Relationships: []
       }

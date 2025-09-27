@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { toCents, computeTotals } from '@/lib/utils';
 import { Search, Plus, Calculator, Check, X, Users, History, Printer, FileText, MessageCircle, Calendar, LogOut, Package, BarChart3, Truck, RefreshCw, Building2, CreditCard } from 'lucide-react';
 import Login from '../components/Login';
 import CustomerManager from '../components/CustomerManager';
@@ -14,6 +15,10 @@ import BusinessInfoCapture from '../components/BusinessInfoCapture';
 import BusinessInfoDisplay from '../components/BusinessInfoDisplay';
 import PurchasePage from '../components/PurchasePage';
 import SalaryPage from '../components/SalaryPage';
+import ErrorBoundary from '../components/ErrorBoundary';
+import TestPage from '../components/TestPage';
+import SimpleLoadManager from '../components/SimpleLoadManager';
+import SimpleProducts from '../components/SimpleProducts';
 import { supabase } from '@/integrations/supabase/client';
 
 interface BillItem {
@@ -79,6 +84,7 @@ const Index = () => {
     updateProduct,
     deleteProduct,
     addCustomer,
+    safeCreateCustomer,
     updateCustomer,
     updateCustomerBalance,
     deleteCustomer,
@@ -117,6 +123,7 @@ const Index = () => {
   ]);
   const [totalAmount, setTotalAmount] = useState(0);
   const [paymentAmount, setPaymentAmount] = useState('');
+  const [calcError, setCalcError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [currentBill, setCurrentBill] = useState<Bill | null>(null);
   const [cleaningCharge, setCleaningCharge] = useState('');
@@ -153,7 +160,12 @@ const Index = () => {
     const validItems = billItems.filter(item => item.item && item.weight && item.rate);
     const itemsTotal = validItems.reduce((sum, item) => sum + item.amount, 0);
     const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
-    const newBalance = previousBalance + itemsTotal + extraCharges;
+    const totalAmount = previousBalance + itemsTotal + extraCharges;
+    const paid = (paymentMethod === 'cash_gpay')
+      ? ((parseFloat(cashAmount) || 0) + (parseFloat(gpayAmount) || 0))
+      : (parseFloat(paymentAmount) || 0);
+    const newBalance = Math.max(totalAmount - paid, 0);
+    const advance = Math.max(paid - totalAmount, 0);
 
     const billContent = `
 🏪 ${shopDetails?.shopName || 'BILLING SYSTEM'}
@@ -180,7 +192,9 @@ ${validItems.map(item =>
 Previous Balance: ₹${previousBalance.toFixed(2)}
 Current Items: ₹${itemsTotal.toFixed(2)}
 Extra Charges: ₹${extraCharges.toFixed(2)}
-Total Amount: ₹${newBalance.toFixed(2)}
+Total Amount: ₹${totalAmount.toFixed(2)}
+Payment Amount: ₹${paid.toFixed(2)}
+New Balance: ₹${newBalance.toFixed(2)}${advance > 0 ? `\nAdvance Payment: ₹${advance.toFixed(2)}` : ''}
 
 Thank you for your business! 🙏
     `.trim();
@@ -418,6 +432,127 @@ Thank you for your business! 🙏
     }
   };
 
+  // Enhanced walk-in customer handling with comprehensive error handling
+  const handleWalkInCustomerCreation = async (phone: string) => {
+    try {
+      const cleanPhone = phone.replace(/\D/g, '');
+      if (cleanPhone.length !== 10) {
+        alert('Please enter a valid 10-digit phone number');
+        return false;
+      }
+
+      console.log(`[WALK-IN] Processing phone: ${cleanPhone} for business: ${businessId}`);
+
+      // Check if customer already exists in local state
+      const existingCustomer = customers.find(c => c.phone === cleanPhone);
+      if (existingCustomer) {
+        console.log(`[WALK-IN] Found existing customer: ${existingCustomer.name}`);
+        setSelectedCustomer(existingCustomer.name);
+        setSelectedCustomerPhone(cleanPhone);
+        return true;
+      }
+
+      // Try database function first
+      try {
+        console.log(`[WALK-IN] Attempting database function for phone: ${cleanPhone}`);
+        const { data: customerId, error: rpcError } = await supabase.rpc('create_or_get_walkin_customer', {
+          p_phone: cleanPhone,
+          p_business_id: businessId
+        });
+
+        if (rpcError) {
+          console.warn(`[WALK-IN] RPC function failed:`, rpcError);
+          throw new Error(`RPC failed: ${rpcError.message}`);
+        }
+
+        if (customerId) {
+          console.log(`[WALK-IN] Customer created/found with ID: ${customerId}`);
+          // Refresh customers data to get the new customer
+          await refreshCustomersData();
+          
+          // Find the customer in the refreshed list
+          const newCustomer = customers.find(c => c.phone === cleanPhone);
+          if (newCustomer) {
+            setSelectedCustomer(newCustomer.name);
+            setSelectedCustomerPhone(cleanPhone);
+            console.log(`[WALK-IN] Successfully set customer: ${newCustomer.name}`);
+            return true;
+          } else {
+            console.warn(`[WALK-IN] Customer ID returned but not found in refreshed list`);
+            throw new Error('Customer created but not found in list');
+          }
+        } else {
+          throw new Error('No customer ID returned from database function');
+        }
+      } catch (rpcError) {
+        console.warn(`[WALK-IN] Database function failed, trying direct insertion:`, rpcError);
+        
+        // Fallback: Direct customer creation
+        const walkInName = `Walk-in Customer (${cleanPhone})`;
+        console.log(`[WALK-IN] Creating customer directly: ${walkInName}`);
+        
+        try {
+          // Try the enhanced safe creation first
+          const customerData = await safeCreateCustomer(walkInName, cleanPhone, 0);
+          setSelectedCustomer(customerData.customer_name);
+          setSelectedCustomerPhone(cleanPhone);
+          console.log(`[WALK-IN] Safe creation successful: ${customerData.customer_name}`);
+          return true;
+        } catch (safeError) {
+          console.warn(`[WALK-IN] Safe creation failed, trying direct:`, safeError);
+          try {
+            await addCustomer({ name: walkInName, phone: cleanPhone, balance: 0 });
+            setSelectedCustomer(walkInName);
+            setSelectedCustomerPhone(cleanPhone);
+            console.log(`[WALK-IN] Direct creation successful: ${walkInName}`);
+            return true;
+          } catch (directError) {
+            console.error(`[WALK-IN] Direct creation also failed:`, directError);
+            
+            // Last resort: Check if customer exists in database but not in local state
+            try {
+              const { data: existingData, error: checkError } = await supabase
+                .from('customers')
+                .select('name, phone')
+                .eq('phone', cleanPhone)
+                .eq('business_id', businessId)
+                .single();
+
+              if (!checkError && existingData) {
+                console.log(`[WALK-IN] Found existing customer in database: ${existingData.name}`);
+                setSelectedCustomer(existingData.name);
+                setSelectedCustomerPhone(cleanPhone);
+                await refreshCustomersData(); // Refresh to sync local state
+                return true;
+              }
+            } catch (checkError) {
+              console.error(`[WALK-IN] Database check failed:`, checkError);
+            }
+            
+            throw new Error(`All customer creation methods failed. Last error: ${directError}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[WALK-IN] Critical error in walk-in customer creation:', e);
+      
+      // Provide specific error messages based on error type
+      let errorMessage = 'Failed to create walk-in customer. Please try again.';
+      if (e instanceof Error) {
+        if (e.message.includes('duplicate key') || e.message.includes('unique constraint')) {
+          errorMessage = 'Customer with this phone number already exists. Please refresh the page.';
+        } else if (e.message.includes('permission') || e.message.includes('policy')) {
+          errorMessage = 'Database permission error. Please contact support.';
+        } else if (e.message.includes('network') || e.message.includes('connection')) {
+          errorMessage = 'Network error. Please check your connection and try again.';
+        }
+      }
+      
+      alert(errorMessage);
+      return false;
+    }
+  };
+
   // Refresh balance from database - BULLETPROOF MANUAL REFRESH
   const refreshCustomerBalance = async () => {
     try {
@@ -529,6 +664,42 @@ Thank you for your business! 🙏
     handleLogout(); // Logout if they cancel registration
   };
 
+  // Quick add customer from billing page and auto-complete bill
+  const handleQuickAddCustomerAndConfirm = async () => {
+    try {
+      const name = customerInput.trim();
+      const phone = newCustomerPhone.trim();
+      if (!name) {
+        alert('Enter customer name');
+        return;
+      }
+      if (!/^\d{10}$/.test(phone)) {
+        alert('Enter a valid 10-digit phone');
+        return;
+      }
+      await addCustomer({ name, phone, balance: 0 });
+      setSelectedCustomer(name);
+      setSelectedCustomerPhone(phone);
+      setShowAddCustomerPhonePrompt(false);
+      await refreshCustomersData();
+
+      // Decide which confirmation path to take
+      const validItems = billItems.filter(item => item.item && item.weight && item.rate);
+      const hasPayment = paymentMethod === 'cash_gpay'
+        ? ((parseFloat(cashAmount) || 0) + (parseFloat(gpayAmount) || 0)) > 0
+        : (parseFloat(paymentAmount) || 0) > 0;
+
+      if (hasPayment) {
+        await handleConfirmBill();
+      } else {
+        await handleConfirmBillWithoutPayment();
+      }
+    } catch (err) {
+      console.error('Quick add customer failed:', err);
+      alert('Failed to add customer. Please try again.');
+    }
+  };
+
   // Business information capture handlers
   const handleBusinessInfoComplete = async (businessInfo: any) => {
     try {
@@ -637,7 +808,7 @@ Thank you for your business! 🙏
     try {
       const ok = await handleAddCustomerIfNeeded();
       if (!ok) return;
-      // Calculate current items total
+      // Calculate current items total (display only)
       const itemsTotal = billItems.filter(item => item.item && item.weight && item.rate).reduce((sum, item) => sum + item.amount, 0);
       const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
       const validItems = billItems.filter(item => item.item && item.weight && item.rate);
@@ -655,6 +826,9 @@ Thank you for your business! 🙏
         totalAmount: itemsTotal + extraCharges, // transaction amount includes charges
         paidAmount: 0,
         balanceAmount: newBalance, // Amount to carry forward
+        cleaningCharge: parseFloat(cleaningCharge) || 0,
+        deliveryCharge: parseFloat(deliveryCharge) || 0,
+        advanceAmount: 0,
         paymentMethod: 'cash' as const,
       };
 
@@ -692,6 +866,7 @@ Thank you for your business! 🙏
       const ok = await handleAddCustomerIfNeeded();
       if (!ok) return;
       let paidAmount = 0;
+      setCalcError(null);
       
       // Calculate paid amount based on payment method with validation
       if (paymentMethod === 'cash_gpay') {
@@ -719,20 +894,29 @@ Thank you for your business! 🙏
         }
       }
       
-      // Calculate current items total
-      const itemsTotal = billItems.filter(item => item.item && item.weight && item.rate).reduce((sum, item) => sum + item.amount, 0);
-      const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
+      // Calculate using cents to avoid precision
+      const { toCents, computeTotals } = await import('../lib/utils');
+      const itemsTotalC = toCents(
+        billItems
+          .filter(item => item.item && item.weight && item.rate)
+          .reduce((sum, item) => sum + (item.amount || 0), 0)
+      );
+      const cleaningC = toCents(cleaningCharge);
+      const deliveryC = toCents(deliveryCharge);
+      const previousBalanceC = toCents(previousBalance);
+      const paidC = toCents(paidAmount);
       const validItems = billItems.filter(item => item.item && item.weight && item.rate);
       
-      // Running balance calculation
-      let totalBillAmount, newBalance, requiredAmount, transactionAmount;
+      // Running balance calculation with defensive checks
+      let totalBillAmount = 0, newBalance = 0, requiredAmount = 0, transactionAmount = 0, advanceAmount = 0;
       
       if (validItems.length === 0 && previousBalance > 0) {
         // This is a balance-only payment (no new items, just paying existing balance)
         totalBillAmount = previousBalance; // Total is just the previous balance
         transactionAmount = 0; // No purchase amount for payment-only transactions
-        newBalance = previousBalance - paidAmount; // Remaining balance after payment
+        newBalance = Math.max(previousBalance - paidAmount, 0); // Clamp to zero
         requiredAmount = previousBalance; // For validation, but partial payments are allowed
+        advanceAmount = Math.max(paidAmount - previousBalance, 0);
         
         // Allow overpayment for advance credit on balance-only payments
         if (paidAmount > previousBalance) {
@@ -741,10 +925,18 @@ Thank you for your business! 🙏
         }
       } else {
         // Regular bill with items: Total = Previous Balance + Current Items + Charges
-        transactionAmount = itemsTotal + extraCharges; // transaction includes charges
-        totalBillAmount = previousBalance + itemsTotal + extraCharges;
-        newBalance = totalBillAmount - paidAmount; // New balance after payment
-        requiredAmount = totalBillAmount; // For validation, but partial payments are allowed
+        const result = computeTotals({
+          previousBalance: previousBalanceC,
+          itemsTotal: itemsTotalC,
+          deliveryCharge: deliveryC,
+          cleaningCharge: cleaningC,
+          paidAmount: paidC,
+        });
+        transactionAmount = result.transactionAmount / 100;
+        totalBillAmount = result.totalAmount / 100;
+        newBalance = result.newBalance / 100;
+        requiredAmount = result.totalAmount / 100;
+        advanceAmount = result.advanceAmount / 100;
         
         // Allow overpayment for advance credit on regular bills
         if (paidAmount > totalBillAmount) {
@@ -762,6 +954,9 @@ Thank you for your business! 🙏
         totalAmount: transactionAmount,
         paidAmount,
         balanceAmount: newBalance,
+        cleaningCharge: parseFloat(cleaningCharge) || 0,
+        deliveryCharge: parseFloat(deliveryCharge) || 0,
+        advanceAmount: advanceAmount || 0,
         paymentMethod,
         upiType: paymentMethod === 'upi' ? upiType : undefined,
         bankName: paymentMethod === 'check' ? bankName : undefined,
@@ -800,6 +995,33 @@ Thank you for your business! 🙏
     }
   };
 
+  // Real-time computed totals for UI display using integer cents
+  const computedSummary = React.useMemo(() => {
+    try {
+      const validItems = billItems.filter(item => item.item && item.weight && item.rate);
+      const itemsTotal = validItems.reduce((sum, item) => sum + (item.amount || 0), 0);
+      const paid = paymentMethod === 'cash_gpay'
+        ? (parseFloat(cashAmount) || 0) + (parseFloat(gpayAmount) || 0)
+        : (parseFloat(paymentAmount) || 0);
+
+      const result = computeTotals({
+        previousBalance: toCents(previousBalance),
+        itemsTotal: toCents(itemsTotal),
+        deliveryCharge: toCents(deliveryCharge),
+        cleaningCharge: toCents(cleaningCharge),
+        paidAmount: toCents(paid),
+      });
+
+      return {
+        total: result.totalAmount / 100,
+        newBalance: result.newBalance / 100,
+        transaction: result.transactionAmount / 100,
+      };
+    } catch (e) {
+      return { total: 0, newBalance: 0, advance: 0, transaction: 0 };
+    }
+  }, [billItems, previousBalance, cleaningCharge, deliveryCharge, paymentAmount, paymentMethod, cashAmount, gpayAmount]);
+
   // Generate bill content using running balance system - ENHANCED for Vasan business
   const generateBillContent = async (bill: Bill, uiPreviousBalance: number) => {
     const time = new Date(bill.timestamp).toLocaleTimeString();
@@ -809,6 +1031,9 @@ Thank you for your business! 🙏
     const billPreviousBalance = uiPreviousBalance;
     
     const itemsTotal = bill.items.reduce((sum, item) => sum + item.amount, 0);
+    const cleaning = (bill as any).cleaningCharge != null ? (bill as any).cleaningCharge : ((bill as any).cleaning_charge != null ? (bill as any).cleaning_charge : 0);
+    const delivery = (bill as any).deliveryCharge != null ? (bill as any).deliveryCharge : ((bill as any).delivery_charge != null ? (bill as any).delivery_charge : 0);
+    const extraCharges = (parseFloat(cleaning) || 0) + (parseFloat(delivery) || 0);
     
     // CRITICAL FIX: Handle payment-only transactions correctly
     let totalBillAmount, newBalance, transactionAmount;
@@ -816,12 +1041,12 @@ Thank you for your business! 🙏
       // Payment-only transaction: no items, only payment
       totalBillAmount = billPreviousBalance; // Previous balance becomes total for payment calculation
       transactionAmount = 0; // No purchase amount for payment-only transactions
-      newBalance = billPreviousBalance - bill.paidAmount; // Direct balance reduction
+      newBalance = Math.max(billPreviousBalance - bill.paidAmount, 0); // Direct balance reduction, clamped
     } else {
       // Normal transaction with items
-      transactionAmount = itemsTotal; // Individual transaction amount (items only)
-      totalBillAmount = billPreviousBalance + itemsTotal;
-      newBalance = totalBillAmount - bill.paidAmount;
+      transactionAmount = itemsTotal + extraCharges; // Include charges
+      totalBillAmount = billPreviousBalance + itemsTotal + extraCharges;
+      newBalance = Math.max(totalBillAmount - bill.paidAmount, 0);
     }
     
     // Add logging to verify calculations match UI
@@ -884,9 +1109,11 @@ ${bill.items.length === 0 ? 'No items - Payment Only Transaction' :
 --------------------------------
 Previous Balance: ₹${billPreviousBalance.toFixed(2)}
 Current Items: ₹${itemsTotal.toFixed(2)}
+Cleaning Charge: ₹${(parseFloat(cleaning) || 0).toFixed(2)}
+Delivery Charge: ₹${(parseFloat(delivery) || 0).toFixed(2)}
 Total Bill Amount: ₹${bill.items.length === 0 && bill.paidAmount > 0 ? '0.00' : totalBillAmount.toFixed(2)}
 Payment Amount: ₹${bill.paidAmount.toFixed(2)}
-New Balance: ₹${newBalance.toFixed(2)}${paymentMethodText}
+New Balance: ₹${newBalance.toFixed(2)}${(bill as any).advanceAmount > 0 ? `\nAdvance Payment: ₹${(bill as any).advanceAmount.toFixed(2)}` : ''}${paymentMethodText}
 ================================
 
 Thank you for your business!`.trim();
@@ -907,9 +1134,13 @@ Thank you for your business!`.trim();
 
     // Use the previousBalance state (from latest bill) instead of customer table balance
     const itemsTotal = billItems.reduce((sum, item) => sum + item.amount, 0);
-    const totalBillAmount = previousBalance + itemsTotal;
-    const paidAmount = parseFloat(paymentAmount) || 0;
-    const newBalance = totalBillAmount - paidAmount;
+    const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
+    const totalBillAmount = previousBalance + itemsTotal + extraCharges;
+    const paidAmount = (paymentMethod === 'cash_gpay')
+      ? ((parseFloat(cashAmount) || 0) + (parseFloat(gpayAmount) || 0))
+      : (parseFloat(paymentAmount) || 0);
+    const newBalance = Math.max(totalBillAmount - paidAmount, 0);
+    const advanceAmount = Math.max(paidAmount - totalBillAmount, 0);
     
     const time = new Date().toLocaleTimeString();
     
@@ -937,9 +1168,11 @@ ${validItems.map((item, index) =>
 --------------------------------
 Previous Balance: ₹${previousBalance.toFixed(2)}
 Current Items: ₹${itemsTotal.toFixed(2)}
+Cleaning Charge: ₹${(parseFloat(cleaningCharge) || 0).toFixed(2)}
+Delivery Charge: ₹${(parseFloat(deliveryCharge) || 0).toFixed(2)}
 Total Bill Amount: ₹${totalBillAmount.toFixed(2)}
 Payment Amount: ₹${paidAmount.toFixed(2)}
-New Balance: ₹${newBalance.toFixed(2)}
+New Balance: ₹${newBalance.toFixed(2)}${advanceAmount > 0 ? `\nAdvance Payment: ₹${advanceAmount.toFixed(2)}` : ''}
 ================================
 
 ** BILLING PREVIEW - NOT CONFIRMED **
@@ -1805,6 +2038,7 @@ Generated by Billing System`;
                     billItems={billItems}
                     totalAmount={totalAmount}
                     onSendWhatsApp={sendBillToWhatsApp}
+                    onWalkInCustomerCreation={handleWalkInCustomerCreation}
                     shopDetails={shopDetails || undefined}
                   />
                 </div>
@@ -1843,6 +2077,15 @@ Generated by Billing System`;
                       className="w-full p-2 border border-gray-300 rounded"
                       maxLength={10}
                     />
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleQuickAddCustomerAndConfirm}
+                        className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
+                      >
+                        Add Customer & Complete Bill
+                      </button>
+                    </div>
                   </div>
                 )}
                 
@@ -2014,12 +2257,7 @@ Generated by Billing System`;
                   <div className="text-sm text-red-600">Previous Balance: ₹{previousBalance.toFixed(2)}</div>
                 )}
                 <div className="text-xl font-bold border-t pt-1">
-                  {(() => {
-                    const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
-                    return (
-                      <>Total Bill Amount: ₹{(previousBalance + totalAmount + extraCharges).toFixed(2)}</>
-                    );
-                  })()}
+                  Total Bill Amount: ₹{computedSummary.total.toFixed(2)}
                 </div>
               </div>
 
@@ -2059,17 +2297,7 @@ Generated by Billing System`;
                 {/* Real-time validation feedback */}
                 {paymentAmount && (() => {
                   const paidAmount = parseFloat(paymentAmount) || 0;
-                  const itemsTotal = billItems.filter(item => item.item && item.weight && item.rate).reduce((sum, item) => sum + item.amount, 0);
-                  const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
-                  const validItems = billItems.filter(item => item.item && item.weight && item.rate);
-                  
-                  let requiredAmount;
-                  if (validItems.length === 0 && previousBalance > 0) {
-                    requiredAmount = previousBalance;
-                  } else {
-                    requiredAmount = previousBalance + itemsTotal + extraCharges;
-                  }
-                  
+                  const requiredAmount = computedSummary.total;
                   if (paidAmount > requiredAmount) {
                     return (
                       <div className="text-red-600 text-sm mt-1">
@@ -2094,13 +2322,8 @@ Generated by Billing System`;
               </div>
               
               <div className="flex flex-col gap-2">
-                <div className="text-lg font-bold">
-                  {(() => {
-                    const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
-                    const paid = parseFloat(paymentAmount) || 0;
-                    return <>New Balance: ₹{((totalAmount + extraCharges + previousBalance) - paid).toFixed(2)}</>;
-                  })()}
-                </div>
+                <div className="text-lg font-bold">New Balance: ₹{computedSummary.newBalance.toFixed(2)}</div>
+                {/* Advance intentionally removed per latest requirement */}
                 <button
                   onClick={() => {
                     resetForm();
@@ -2168,13 +2391,20 @@ Generated by Billing System`;
                     
                     {paymentMethod === 'upi' && (
                       <div className="ml-6">
-                        <input
-                          type="text"
+                        <select
                           value={upiType}
                           onChange={(e) => setUpiType(e.target.value)}
                           className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                          placeholder="GPay, PhonePe, Paytm, etc."
-                        />
+                        >
+                          <option value="">Select UPI Provider</option>
+                          <option value="GPay">GPay</option>
+                          <option value="PhonePe">PhonePe</option>
+                          <option value="Paytm">Paytm</option>
+                          <option value="BHIM">BHIM</option>
+                          <option value="Amazon Pay">Amazon Pay</option>
+                          <option value="Mobikwik">Mobikwik</option>
+                          <option value="Other">Other</option>
+                        </select>
                       </div>
                     )}
                     
@@ -2302,7 +2532,8 @@ Generated by Billing System`;
                     if (validItems.length === 0 && previousBalance > 0) {
                       requiredAmount = previousBalance;
                     } else {
-                      requiredAmount = previousBalance + itemsTotal;
+                      const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
+                      requiredAmount = previousBalance + itemsTotal + extraCharges;
                     }
                     
                     const difference = paidAmount - requiredAmount;
@@ -2332,14 +2563,8 @@ Generated by Billing System`;
                           </div>
                           <div className="flex justify-between font-medium border-t pt-1">
                             <span>New Balance:</span>
-                            <span>₹{(requiredAmount - paidAmount).toFixed(2)}</span>
+                            <span>₹{(Math.max(requiredAmount - paidAmount, 0)).toFixed(2)}</span>
                           </div>
-                          
-                          {paidAmount > requiredAmount && (
-                            <div className="text-green-600 text-xs mt-2 p-2 bg-green-50 rounded border border-green-200">
-                              ✓ Advance payment: ₹{(paidAmount - requiredAmount).toFixed(2)} will be credited to customer
-                            </div>
-                          )}
                           {paidAmount > 0 && paidAmount < requiredAmount && (
                             <div className="text-yellow-600 text-xs mt-2 p-2 bg-yellow-50 rounded border border-yellow-200">
                               ℹ️ Partial payment: ₹{(requiredAmount - paidAmount).toFixed(2)} will remain as balance
@@ -2370,9 +2595,11 @@ Generated by Billing System`;
                       
                       let requiredAmount;
                       if (validItems.length === 0 && previousBalance > 0) {
-                        requiredAmount = previousBalance;
+                        const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
+                        requiredAmount = previousBalance + extraCharges;
                       } else {
-                        requiredAmount = previousBalance + itemsTotal;
+                        const extraCharges = (parseFloat(cleaningCharge) || 0) + (parseFloat(deliveryCharge) || 0);
+                        requiredAmount = previousBalance + itemsTotal + extraCharges;
                       }
                       
                       const isValidPayment = paidAmount > 0;
@@ -2499,7 +2726,35 @@ Generated by Billing System`;
         {/* Load View - NEW */}
         {currentView === 'load' && (
           <div className="bg-white rounded-lg shadow-md p-3 sm:p-4">
-            <LoadManager businessId={businessId} />
+            <div className="mb-4">
+              <h2 className="text-lg sm:text-2xl font-bold mb-3">Load Management</h2>
+              <p className="text-sm text-gray-600">Manage your inventory and load entries</p>
+            </div>
+            
+            {/* Debug Info */}
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
+              <h4 className="font-semibold text-blue-800">Debug Info</h4>
+              <p className="text-sm text-blue-700">Business ID: {businessId}</p>
+              <p className="text-sm text-blue-700">Products Count: {products.length}</p>
+              <p className="text-sm text-blue-700">Suppliers Count: {suppliers.length}</p>
+            </div>
+            
+            <ErrorBoundary fallback={
+              <div className="text-center py-8">
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+                  <h3 className="font-semibold">Error Loading Load Manager</h3>
+                  <p>There was an error loading the load management page. Please try again.</p>
+                </div>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  Reload Page
+                </button>
+              </div>
+            }>
+              <SimpleLoadManager businessId={businessId} />
+            </ErrorBoundary>
           </div>
         )}
 
@@ -2519,21 +2774,45 @@ Generated by Billing System`;
           <div className="bg-white rounded-lg shadow-md p-3 sm:p-4">
             <h2 className="text-lg sm:text-2xl font-bold mb-3">Manage Products</h2>
             
-            {/* Business Information Display */}
-            <BusinessInfoDisplay
-              businessInfo={businessInfo}
-              onUpdate={handleBusinessInfoUpdate}
-              businessId={businessId}
-            />
+            {/* Debug Info */}
+            <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded">
+              <h4 className="font-semibold text-green-800">Debug Info</h4>
+              <p className="text-sm text-green-700">Business ID: {businessId}</p>
+              <p className="text-sm text-green-700">Products Count: {products.length}</p>
+              <p className="text-sm text-green-700">Suppliers Count: {suppliers.length}</p>
+              <p className="text-sm text-green-700">Loading: {loading ? 'Yes' : 'No'}</p>
+            </div>
             
-            <Products 
-              products={products}
-              onAddProduct={addProduct}
-              onUpdateProduct={updateProduct}
-              onDeleteProduct={deleteProduct}
-              suppliers={suppliers}
-              onAddSupplier={addSupplier}
-            />
+            {/* Business Information Display */}
+            <ErrorBoundary fallback={
+              <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded mb-4">
+                <h3 className="font-semibold">Business Info Error</h3>
+                <p>Could not load business information. The products section will still work.</p>
+              </div>
+            }>
+              <BusinessInfoDisplay
+                businessInfo={businessInfo}
+                onUpdate={handleBusinessInfoUpdate}
+                businessId={businessId}
+              />
+            </ErrorBoundary>
+            
+            <ErrorBoundary fallback={
+              <div className="text-center py-8">
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+                  <h3 className="font-semibold">Error Loading Products</h3>
+                  <p>There was an error loading the products page. Please try again.</p>
+                </div>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  Reload Page
+                </button>
+              </div>
+            }>
+              <SimpleProducts businessId={businessId} />
+            </ErrorBoundary>
           </div>
         )}
 
@@ -2811,7 +3090,9 @@ Generated by Billing System`;
         {currentView === 'salary' && userType === 'owner' && (
           <div className="bg-white rounded-lg shadow-md p-3 sm:p-4">
             <h2 className="text-lg sm:text-2xl font-bold mb-3">Salary</h2>
-            <SalaryPage businessId={businessId} />
+            <ErrorBoundary>
+              <SalaryPage businessId={businessId} />
+            </ErrorBoundary>
           </div>
         )}
         
