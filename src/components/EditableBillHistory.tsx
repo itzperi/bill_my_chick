@@ -128,8 +128,9 @@ Thank you for your business!
           <head>
             <title>History - ${customerName}</title>
             <style>
-              body { font-family: monospace; padding: 20px; }
-              pre { white-space: pre-wrap; }
+              @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+              body { font-family: 'Roboto', sans-serif; font-weight: 700; padding: 20px; }
+              pre { white-space: pre-wrap; font-family: 'Roboto', sans-serif; font-weight: 700; font-size: 16px; }
             </style>
           </head>
           <body>

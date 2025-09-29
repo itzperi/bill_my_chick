@@ -141,9 +141,10 @@ Thank you for your business! 🙏
           <head>
             <title>Walk-in Bill</title>
             <style>
-              body { font-family: 'Courier New', monospace; padding: 20px; line-height: 1.4; }
-              pre { white-space: pre-wrap; font-size: 12px; margin: 0; }
-              @media print { body { margin: 0; padding: 10px; } pre { font-size: 11px; } }
+              @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+              body { font-family: 'Roboto', sans-serif; font-weight: 700; padding: 20px; line-height: 1.4; }
+              pre { white-space: pre-wrap; font-size: 16px; margin: 0; font-family: 'Roboto', sans-serif; font-weight: 700; }
+              @media print { body { margin: 0; padding: 10px; font-weight: 700; } pre { font-size: 14px; font-weight: 700; } }
             </style>
           </head>
           <body>

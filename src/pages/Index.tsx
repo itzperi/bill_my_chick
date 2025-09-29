@@ -1186,20 +1186,24 @@ Use "Confirm Bill" to save this bill.
           <head>
             <title>Billing Preview - ${selectedCustomer}</title>
             <style>
+              @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
               body { 
-                font-family: 'Courier New', monospace; 
+                font-family: 'Roboto', sans-serif; 
+                font-weight: 700;
                 padding: 20px; 
                 line-height: 1.4;
                 background: white;
               }
               pre { 
                 white-space: pre-wrap; 
-                font-size: 12px;
+                font-size: 16px;
                 margin: 0;
+                font-family: 'Roboto', sans-serif;
+                font-weight: 700;
               }
               @media print {
-                body { margin: 0; padding: 10px; }
-                pre { font-size: 11px; }
+                body { margin: 0; padding: 10px; font-weight: 700; }
+                pre { font-size: 14px; font-weight: 700; }
               }
             </style>
           </head>
@@ -1225,8 +1229,10 @@ Use "Confirm Bill" to save this bill.
             <head>
               <title>Bill - ${bill.customer}</title>
               <style>
+                @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
                 body { 
-                  font-family: 'Courier New', monospace; 
+                  font-family: 'Roboto', sans-serif; 
+                  font-weight: 700;
                   padding: 20px; 
                   line-height: 1.4;
                   background: white;
@@ -1234,18 +1240,21 @@ Use "Confirm Bill" to save this bill.
                 }
                 pre { 
                   white-space: pre-wrap; 
-                  font-size: 12px;
+                  font-size: 16px;
                   margin: 0;
-                  font-family: 'Courier New', monospace;
+                  font-family: 'Roboto', sans-serif;
+                  font-weight: 700;
                 }
                 @media print {
                   body { 
                     margin: 0; 
                     padding: 10px; 
+                    font-weight: 700;
                   }
                   pre { 
-                    font-size: 11px; 
+                    font-size: 14px; 
                     line-height: 1.2;
+                    font-weight: 700;
                   }
                 }
                 @page {
