@@ -22,7 +22,7 @@ CREATE POLICY "Allow all on shops_logins" ON public.shops_logins FOR ALL USING (
 
 -- 3. Check if Vasan login already exists and remove if it does (to avoid conflicts)
 DELETE FROM public.shops_logins 
-WHERE username = 'Vasan' OR business_id = 'vasan_chicken_perambur';
+WHERE username IN ('Vasan', 'vasanp') OR business_id = 'vasan_chicken_perambur';
 
 -- 4. Insert the new shop login for Vasan Chicken Perambur
 INSERT INTO public.shops_logins (
@@ -32,7 +32,7 @@ INSERT INTO public.shops_logins (
     logo_url,
     created_at
 ) VALUES (
-    'Vasan',
+    'vasanp',
     '1234',
     'vasan_chicken_perambur',
     NULL,
@@ -87,7 +87,7 @@ DECLARE
 BEGIN
     SELECT * INTO login_record 
     FROM public.shops_logins 
-    WHERE username = 'Vasan';
+    WHERE username = 'vasanp';
     
     IF FOUND THEN
         RAISE NOTICE '✅ SUCCESS: Vasan Chicken Perambur login created successfully!';
@@ -103,7 +103,7 @@ BEGIN
         RAISE NOTICE '   - GST Number: 33AAAAA0000A1Z5';
         RAISE NOTICE '';
         RAISE NOTICE '🔑 Login Credentials:';
-        RAISE NOTICE '   - Username: Vasan';
+        RAISE NOTICE '   - Username: vasanp';
         RAISE NOTICE '   - Password: 1234';
         RAISE NOTICE '';
         RAISE NOTICE '🎯 The shop can now login using these credentials!';
