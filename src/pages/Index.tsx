@@ -49,7 +49,7 @@ interface Bill {
 }
 
 type UserType = 'owner' | 'staff';
-type BusinessId = 'santhosh1' | 'santhosh2' | 'vasan' | 'demo1_business' | 'demo2_business' | 'demo3_business' | 'demo4_business' | 'demo5_business' | 'demo6_business' | 'demo7_business' | 'demo8_business' | 'demo9_business' | 'demo10_business';
+type BusinessId = 'santhosh1' | 'santhosh2' | 'vasan' | 'vasan_chicken_perambur' | 'demo1_business' | 'demo2_business' | 'demo3_business' | 'demo4_business' | 'demo5_business' | 'demo6_business' | 'demo7_business' | 'demo8_business' | 'demo9_business' | 'demo10_business';
 
 const Index = () => {
   // Authentication state
@@ -277,11 +277,11 @@ Thank you for your business! 🙏
     setIsLoggedIn(true);
 
     // Special handling for Vasan - skip shop registration, use pre-populated business info
-    if (id === 'vasan') {
+    if (id === 'vasan' || id === 'vasan_chicken_perambur') {
       // Vasan's business info is pre-populated in the database
       // No need for shop registration
       setShopDetails({
-        shopName: 'Vasan Chicken Center',
+        shopName: 'Vasan Chicken Perambur',
         address: '61, Vadivelu Mudali St, Chinnaiyan Colony, Perambur, Chennai, Tamil Nadu 600011',
         gstNumber: '33AAAAA0000A1Z5'
       });
