@@ -693,26 +693,44 @@ export const useSupabaseData = (businessId: string) => {
 
   const deleteCustomer = async (customerName: string) => {
     try {
-      // First, check if customer has any bills
-      const { data: customerBills } = await supabase
-        .from('bills')
+      // Attempt cascade deletion via RPC if available
+      // 1) Fetch customer id
+      const { data: customerRow, error: findErr } = await supabase
+        .from('customers')
         .select('id')
-        .eq('customer_name', customerName)
-        .eq('business_id', businessId);
+        .eq('name', customerName)
+        .eq('business_id', businessId)
+        .single();
 
-      if (customerBills && customerBills.length > 0) {
-        throw new Error('Cannot delete customer with existing bills. Please delete all bills first.');
+      if (!findErr && customerRow && (customerRow as any).id) {
+        // 2) Call cascade delete
+        const { error: rpcErr } = await (supabase as any).rpc('delete_customer_with_cascade', {
+          p_customer_id: (customerRow as any).id,
+          p_business_id: businessId
+        });
+
+        if (!rpcErr) {
+          setCustomers(prev => prev.filter(c => c.name !== customerName));
+          return;
+        }
+        console.warn('[DELETE CUSTOMER] RPC cascade failed, falling back:', rpcErr);
       }
 
-      // Delete customer from database
-      const { error } = await supabase
+      // Fallback path (no RPC): remove bills then customer
+      const { error: delBillsErr } = await supabase
+        .from('bills')
+        .delete()
+        .eq('customer_name', customerName)
+        .eq('business_id', businessId);
+      if (delBillsErr) throw delBillsErr;
+
+      const { error: delCustErr } = await supabase
         .from('customers')
         .delete()
         .eq('name', customerName)
         .eq('business_id', businessId);
+      if (delCustErr) throw delCustErr;
 
-      if (error) throw error;
-      
       setCustomers(prev => prev.filter(c => c.name !== customerName));
     } catch (error) {
       console.error('Error deleting customer:', error);
@@ -970,6 +988,42 @@ export const useSupabaseData = (businessId: string) => {
     return 0; // First bill for this customer
   };
 
+  // Delete supplier with cascade delete
+  const deleteSupplier = async (supplierId: number) => {
+    try {
+      console.log(`[DELETE SUPPLIER] Deleting supplier ID: ${supplierId} for business: ${businessId}`);
+      
+      // Use the database function for cascade delete
+      const { error } = await (supabase as any).rpc('delete_supplier_with_cascade', {
+        p_supplier_id: supplierId,
+        p_business_id: businessId
+      });
+      
+      if (error) {
+        console.error('[DELETE SUPPLIER] Database error:', error);
+        throw error;
+      }
+      
+      // Update local state
+      setSuppliers(prev => prev.filter(s => {
+        if (typeof s === 'string') return true; // Keep string entries
+        return s.id !== supplierId;
+      }));
+      
+      setSuppliersFull(prev => prev.filter(s => s.id !== supplierId));
+      
+      // Also remove from purchases and salaries if they exist
+      setPurchases(prev => prev.filter(p => p.supplier_id !== supplierId));
+      setSalaries(prev => prev.filter(s => s.supplier_id !== supplierId));
+      
+      console.log('[DELETE SUPPLIER] Supplier and all related data deleted successfully');
+      
+    } catch (error) {
+      console.error('[DELETE SUPPLIER] Error deleting supplier:', error);
+      throw error;
+    }
+  };
+
   return {
     products,
     customers,
@@ -988,6 +1042,7 @@ export const useSupabaseData = (businessId: string) => {
     updateCustomerBalance,
     deleteCustomer,
     addSupplier,
+    deleteSupplier,
     getSupplierSuggestions,
     addPurchase,
     addSalary,

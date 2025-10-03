@@ -282,16 +282,16 @@ const LoadManager: React.FC<LoadManagerProps> = ({
   };
 
   const handleDeleteEntry = async (id: number) => {
-    if (!window.confirm('Are you sure you want to delete this entry?')) {
+    if (!window.confirm('Are you sure you want to delete this entry? This will also delete all related salary and purchase data.')) {
       return;
     }
 
     try {
-      const { error } = await supabase
-        .from('load_entries')
-        .delete()
-        .eq('id', id)
-        .eq('business_id', businessId);
+      // Use the database function for cascade delete
+      const { error } = await supabase.rpc('delete_load_entry_with_cascade', {
+        p_load_id: id,
+        p_business_id: businessId
+      });
 
       if (error) {
         console.error('Error deleting entry:', error);

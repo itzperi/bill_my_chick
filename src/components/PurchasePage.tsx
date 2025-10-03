@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Save } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import SupplierAutocomplete from './SupplierAutocomplete';
 
 interface PurchasePageProps {
   businessId: string;
@@ -23,6 +24,71 @@ const PurchasePage: React.FC<PurchasePageProps> = ({ businessId, suppliersExtern
   const [paidAmount, setPaidAmount] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Get supplier suggestions function
+  const getSupplierSuggestions = async (searchTerm: string = '') => {
+    try {
+      const { data, error } = await supabase.rpc('get_supplier_suggestions', {
+        p_business_id: businessId,
+        p_search_term: searchTerm
+      });
+      
+      if (error) {
+        console.error('Error fetching supplier suggestions:', error);
+        return [];
+      }
+      
+      return data || [];
+    } catch (error) {
+      console.error('Error in getSupplierSuggestions:', error);
+      return [];
+    }
+  };
+
+  // Add supplier function
+  const addSupplier = async (name: string) => {
+    const clean = name.trim();
+    try {
+      const { data, error } = await supabase
+        .from('suppliers')
+        .insert([{ name: clean, business_id: businessId }])
+        .select('id, name')
+        .single();
+
+      if (error) {
+        // Handle duplicate gracefully: fetch existing and return
+        // Postgres unique violation
+        // @ts-ignore
+        if (error.code === '23505') {
+          const { data: existing, error: fetchErr } = await supabase
+            .from('suppliers')
+            .select('id, name')
+            .eq('business_id', businessId)
+            .ilike('name', clean)
+            .limit(1)
+            .single();
+          if (fetchErr) {
+            console.error('Fetch existing supplier failed after duplicate:', fetchErr);
+            throw error;
+          }
+          // Ensure local state contains it
+          setSuppliers(prev => {
+            const exists = prev.find(s => s.id === existing.id);
+            return exists ? prev : [...prev, existing as any];
+          });
+          return existing as any;
+        }
+        console.error('Error adding supplier:', error);
+        throw error;
+      }
+
+      setSuppliers(prev => [...prev, data as any]);
+      return data as any;
+    } catch (err) {
+      console.error('Error adding supplier:', err);
+      throw err;
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -57,7 +123,27 @@ const PurchasePage: React.FC<PurchasePageProps> = ({ businessId, suppliersExtern
   }, [supplierInput, suppliers]);
 
   const handleSave = async () => {
-    if (!productId || !selectedSupplier) {
+    // Resolve supplier automatically if user typed a name but didn't click a suggestion
+    let supplierToUse: Supplier | null = selectedSupplier;
+    if (!supplierToUse && supplierInput.trim()) {
+      const typed = supplierInput.trim();
+      // Try find in local list first (case-insensitive)
+      supplierToUse = suppliers.find(s => s.name.toLowerCase() === typed.toLowerCase()) || null;
+      // If not found, create it
+      if (!supplierToUse) {
+        try {
+          const created = await addSupplier(typed);
+          supplierToUse = created as unknown as Supplier;
+          // Ensure local state is in sync for immediate use
+          setSelectedSupplier(supplierToUse);
+        } catch (e: any) {
+          alert('Failed to create supplier: ' + (e?.message || 'Unknown error'));
+          return;
+        }
+      }
+    }
+
+    if (!productId || !supplierToUse) {
       alert('Select product and supplier');
       return;
     }
@@ -78,7 +164,7 @@ const PurchasePage: React.FC<PurchasePageProps> = ({ businessId, suppliersExtern
         date: date,
         purchase_date: date,
         product_id: Number(productId),
-        supplier_id: selectedSupplier.id,
+        supplier_id: supplierToUse.id,
         quantity_kg: quantity,
         price_per_kg: price,
         total_amount: totalAmount,
@@ -139,36 +225,21 @@ const PurchasePage: React.FC<PurchasePageProps> = ({ businessId, suppliersExtern
           </div>
         <div>
           <label className="block text-sm font-medium mb-1">Supplier</label>
-          <input
-            type="text"
+          <SupplierAutocomplete
             value={supplierInput}
-            onChange={(e) => {
-              setSupplierInput(e.target.value);
-              setSelectedSupplier(null);
+            onChange={(value) => {
+              setSupplierInput(value);
+              // Find and set selected supplier if it matches
+              const matchingSupplier = suppliers.find(s => s.name.toLowerCase() === value.toLowerCase());
+              setSelectedSupplier(matchingSupplier || null);
             }}
-            placeholder="Type supplier name"
-            className="w-full p-2 border border-gray-300 rounded"
+            onAddSupplier={addSupplier}
+            getSupplierSuggestions={getSupplierSuggestions}
+            businessId={businessId}
+            placeholder="Type supplier name or add new"
+            className="w-full"
           />
-          {supplierInput && !selectedSupplier && (
-            <div className="mt-1 max-h-40 overflow-y-auto border rounded">
-              {filteredSuppliers.map(s => (
-                <div
-                  key={s.id}
-                  className="p-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0"
-                  onClick={() => {
-                    setSelectedSupplier(s);
-                    setSupplierInput(s.name);
-                  }}
-                >
-                  {s.name}
-                </div>
-              ))}
-              {filteredSuppliers.length === 0 && (
-                <div className="p-2 text-sm text-gray-500">No matching suppliers</div>
-              )}
-            </div>
-          )}
-          </div>
+        </div>
           <div>
             <label className="block text-sm font-medium mb-1">Product</label>
             <select

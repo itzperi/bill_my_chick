@@ -14,6 +14,8 @@ const SimpleProducts: React.FC<SimpleProductsProps> = ({ businessId }) => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState('');
   const [loading, setLoading] = useState(true);
+  const [deleteConfirmSupplier, setDeleteConfirmSupplier] = useState<{ id: number; name: string } | null>(null);
+  const [deletingSupplier, setDeletingSupplier] = useState(false);
 
   // Load data from database
   useEffect(() => {
@@ -143,6 +145,43 @@ const SimpleProducts: React.FC<SimpleProductsProps> = ({ businessId }) => {
     setEditingName('');
   };
 
+  const handleDeleteSupplier = async (supplier: { id: number; name: string }) => {
+    setDeleteConfirmSupplier(supplier);
+  };
+
+  const confirmDeleteSupplier = async () => {
+    if (!deleteConfirmSupplier) return;
+    
+    setDeletingSupplier(true);
+    try {
+      // Use the database function for cascade delete
+      const { error } = await supabase.rpc('delete_supplier_with_cascade', {
+        p_supplier_id: deleteConfirmSupplier.id,
+        p_business_id: businessId
+      });
+      
+      if (error) {
+        console.error('Error deleting supplier:', error);
+        alert('Error deleting supplier: ' + error.message);
+        return;
+      }
+      
+      // Update local state
+      setSuppliers(prev => prev.filter(s => s.id !== deleteConfirmSupplier.id));
+      setDeleteConfirmSupplier(null);
+      alert(`Supplier "${deleteConfirmSupplier.name}" and all related data deleted successfully!`);
+    } catch (error) {
+      console.error('Error deleting supplier:', error);
+      alert('Error deleting supplier. Please try again.');
+    } finally {
+      setDeletingSupplier(false);
+    }
+  };
+
+  const cancelDeleteSupplier = () => {
+    setDeleteConfirmSupplier(null);
+  };
+
   const handleDeleteProduct = async (id: number) => {
     if (!window.confirm('Are you sure you want to delete this product?')) return;
 
@@ -226,8 +265,15 @@ const SimpleProducts: React.FC<SimpleProductsProps> = ({ businessId }) => {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
           {suppliers.map((supplier) => (
-            <div key={supplier.id} className="bg-white border border-gray-200 rounded-lg p-3">
+            <div key={supplier.id} className="bg-white border border-gray-200 rounded-lg p-3 flex justify-between items-center">
               <span className="font-medium">{supplier.name}</span>
+              <button
+                onClick={() => handleDeleteSupplier(supplier)}
+                className="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs"
+                title="Delete supplier and all related data"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
             </div>
           ))}
           {suppliers.length === 0 && (
@@ -299,6 +345,50 @@ const SimpleProducts: React.FC<SimpleProductsProps> = ({ businessId }) => {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmSupplier && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 text-red-600">Delete Supplier</h3>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete <strong>{deleteConfirmSupplier.name}</strong>? 
+              This will also delete all related data including:
+            </p>
+            <ul className="text-sm text-gray-600 mb-6 list-disc list-inside">
+              <li>All salary entries for this supplier</li>
+              <li>All purchase entries for this supplier</li>
+              <li>All load entries for this supplier</li>
+            </ul>
+            <p className="text-red-600 text-sm mb-6 font-medium">
+              ⚠️ This action cannot be undone!
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelDeleteSupplier}
+                disabled={deletingSupplier}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteSupplier}
+                disabled={deletingSupplier}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {deletingSupplier ? (
+                  <>
+                    <div className="inline mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Supplier'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

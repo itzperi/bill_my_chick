@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Save } from 'lucide-react';
+import { Save, Trash2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 
 interface SalaryPageProps {
@@ -18,6 +18,8 @@ const SalaryPage: React.FC<SalaryPageProps> = ({ businessId }) => {
   const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>('daily');
   const [rows, setRows] = useState<{ salary_date: string; amount: number; employee_id?: string; notes?: string }[]>([]);
+  const [deleteConfirmIndex, setDeleteConfirmIndex] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     try {
@@ -162,6 +164,47 @@ const SalaryPage: React.FC<SalaryPageProps> = ({ businessId }) => {
     }
   };
 
+  const handleDeleteSalary = async (index: number) => {
+    setDeleteConfirmIndex(index);
+  };
+
+  const confirmDeleteSalary = async () => {
+    if (deleteConfirmIndex === null) return;
+    
+    setDeleting(true);
+    try {
+      const salaryEntry = filteredRows[deleteConfirmIndex];
+      
+      // Delete from database
+      const { error } = await supabase
+        .from('salaries')
+        .delete()
+        .eq('business_id', businessId)
+        .eq('salary_date', salaryEntry.salary_date)
+        .eq('amount', salaryEntry.amount);
+      
+      if (error) {
+        console.error('Error deleting salary:', error);
+        alert('Error deleting salary: ' + error.message);
+        return;
+      }
+      
+      // Update local state
+      setRows(prev => prev.filter((_, idx) => idx !== deleteConfirmIndex));
+      setDeleteConfirmIndex(null);
+      alert('Salary entry deleted successfully!');
+    } catch (error) {
+      console.error('Error deleting salary:', error);
+      alert('Error deleting salary. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const cancelDeleteSalary = () => {
+    setDeleteConfirmIndex(null);
+  };
+
   if (loading) {
     return (
       <div className="text-center py-8">
@@ -273,6 +316,7 @@ const SalaryPage: React.FC<SalaryPageProps> = ({ businessId }) => {
               <tr className="bg-gray-100">
                 <th className="border p-2 text-left">Date</th>
                 <th className="border p-2 text-right">Amount</th>
+                <th className="border p-2 text-center">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -280,17 +324,72 @@ const SalaryPage: React.FC<SalaryPageProps> = ({ businessId }) => {
                 <tr key={idx} className="hover:bg-gray-50">
                   <td className="border p-2">{r.salary_date}</td>
                   <td className="border p-2 text-right">₹{Number(r.amount).toFixed(2)}</td>
+                  <td className="border p-2 text-center">
+                    <button
+                      onClick={() => handleDeleteSalary(idx)}
+                      className="px-2 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600"
+                      title="Delete salary entry"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </td>
                 </tr>
               ))}
               {filteredRows.length === 0 && (
                 <tr>
-                  <td className="border p-3 text-center text-gray-500" colSpan={2}>No entries</td>
+                  <td className="border p-3 text-center text-gray-500" colSpan={3}>No entries</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmIndex !== null && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 text-red-600">Delete Salary Entry</h3>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete this salary entry?
+            </p>
+            <div className="bg-gray-50 p-3 rounded mb-4">
+              <p className="text-sm text-gray-600">
+                <strong>Date:</strong> {filteredRows[deleteConfirmIndex]?.salary_date}
+              </p>
+              <p className="text-sm text-gray-600">
+                <strong>Amount:</strong> ₹{Number(filteredRows[deleteConfirmIndex]?.amount).toFixed(2)}
+              </p>
+            </div>
+            <p className="text-red-600 text-sm mb-6 font-medium">
+              ⚠️ This action cannot be undone!
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelDeleteSalary}
+                disabled={deleting}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteSalary}
+                disabled={deleting}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {deleting ? (
+                  <>
+                    <div className="inline mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Entry'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

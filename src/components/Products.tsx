@@ -14,7 +14,9 @@ interface ProductsProps {
   onDeleteProduct: (id: number) => void;
   suppliers?: { id: number; name: string }[];
   onAddSupplier?: (name: string) => Promise<void> | void;
+  onDeleteSupplier?: (id: number) => Promise<void> | void;
   getSupplierSuggestions?: (searchTerm: string) => Promise<{ id: number; name: string }[]>;
+  businessId?: string;
 }
 
 const Products: React.FC<ProductsProps> = ({ 
@@ -24,12 +26,16 @@ const Products: React.FC<ProductsProps> = ({
   onDeleteProduct,
   suppliers = [],
   onAddSupplier,
-  getSupplierSuggestions
+  onDeleteSupplier,
+  getSupplierSuggestions,
+  businessId
 }) => {
   const [newProductName, setNewProductName] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState('');
   const [newSupplierName, setNewSupplierName] = useState('');
+  const [deleteConfirmSupplier, setDeleteConfirmSupplier] = useState<{ id: number; name: string } | null>(null);
+  const [deletingSupplier, setDeletingSupplier] = useState(false);
 
   const handleAddProduct = () => {
     if (newProductName.trim()) {
@@ -70,6 +76,31 @@ const Products: React.FC<ProductsProps> = ({
       alert('Failed to add supplier: ' + msg);
       console.error('Failed to add supplier:', e);
     }
+  };
+
+  const handleDeleteSupplier = async (supplier: { id: number; name: string }) => {
+    setDeleteConfirmSupplier(supplier);
+  };
+
+  const confirmDeleteSupplier = async () => {
+    if (!deleteConfirmSupplier || !onDeleteSupplier) return;
+    
+    setDeletingSupplier(true);
+    try {
+      await onDeleteSupplier(deleteConfirmSupplier.id);
+      setDeleteConfirmSupplier(null);
+      alert(`Supplier "${deleteConfirmSupplier.name}" and all related data deleted successfully!`);
+    } catch (e) {
+      const msg = (e as any)?.message || 'Unknown error';
+      alert('Failed to delete supplier: ' + msg);
+      console.error('Failed to delete supplier:', e);
+    } finally {
+      setDeletingSupplier(false);
+    }
+  };
+
+  const cancelDeleteSupplier = () => {
+    setDeleteConfirmSupplier(null);
   };
 
   return (
@@ -121,8 +152,17 @@ const Products: React.FC<ProductsProps> = ({
         </form>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
           {suppliers.map((s, idx) => (
-            <div key={`${s}-${idx}`} className="bg-white border border-gray-200 rounded-lg p-3">
-              <span className="font-medium">{s}</span>
+            <div key={`${s.id || s}-${idx}`} className="bg-white border border-gray-200 rounded-lg p-3 flex justify-between items-center">
+              <span className="font-medium">{typeof s === 'string' ? s : s.name}</span>
+              {onDeleteSupplier && typeof s === 'object' && s.id && (
+                <button
+                  onClick={() => handleDeleteSupplier(s)}
+                  className="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs"
+                  title="Delete supplier and all related data"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              )}
             </div>
           ))}
           {suppliers.length === 0 && (
@@ -194,6 +234,50 @@ const Products: React.FC<ProductsProps> = ({
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmSupplier && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 text-red-600">Delete Supplier</h3>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete <strong>{deleteConfirmSupplier.name}</strong>? 
+              This will also delete all related data including:
+            </p>
+            <ul className="text-sm text-gray-600 mb-6 list-disc list-inside">
+              <li>All salary entries for this supplier</li>
+              <li>All purchase entries for this supplier</li>
+              <li>All load entries for this supplier</li>
+            </ul>
+            <p className="text-red-600 text-sm mb-6 font-medium">
+              ⚠️ This action cannot be undone!
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelDeleteSupplier}
+                disabled={deletingSupplier}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteSupplier}
+                disabled={deletingSupplier}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {deletingSupplier ? (
+                  <>
+                    <div className="inline mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Supplier'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
